@@ -1,0 +1,9 @@
+[project]
+name = "personal-curation-bot"
+version = "0.1.0"
+description = "Private local-first personal curation bot for Simon"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

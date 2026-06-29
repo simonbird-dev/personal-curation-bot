@@ -1,0 +1,14 @@
+{
+  "finds": {
+    "target_count": 2,
+    "description": "Personal Instagram finds ready for review/post package preparation."
+  },
+  "live": {
+    "target_count": 2,
+    "description": "Personal live/reference captures."
+  },
+  "fashion": {
+    "target_count": 3,
+    "description": "Image-first fashion/Pinterest lane; private-account handling is not implemented in this slice."
+  }
+}
