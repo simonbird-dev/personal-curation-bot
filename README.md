@@ -40,3 +40,27 @@ python3 -m curation_bot.cli status
 ```
 
 Default storage root is `./data/`.
+
+## Instagram account switching
+
+The bot separates saved content/category state from Instagram login state.
+
+- Content/category queues live under the chosen bot data root, usually `./data/`.
+- Instagram browser sessions live under `.runtime/instagram-accounts/<account-id>/browser-profile/`.
+- The active Instagram account pointer lives under `.runtime/active-instagram-account.json`.
+
+That means you can test with one Instagram account now and change the connected account later without deleting saved content/categories.
+
+Commands:
+
+```bash
+# choose or switch the active local Instagram account profile
+PYTHONPATH=src python -m curation_bot.instagram_accounts_cli set-active --account-id test
+
+# log into that account profile from the VM terminal
+PYTHONPATH=src python -m curation_bot.instagram_login terminal-login
+
+# later, switch to another account profile without touching content queues
+PYTHONPATH=src python -m curation_bot.instagram_accounts_cli set-active --account-id main
+PYTHONPATH=src python -m curation_bot.instagram_login terminal-login
+```

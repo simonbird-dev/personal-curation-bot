@@ -8,14 +8,25 @@ from pathlib import Path
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
-from .paths import INSTAGRAM_PROFILE_DIR, SCREENSHOTS_DIR, ensure_runtime_dirs
+from .instagram_accounts import AccountConfigError, account_ref, get_active_account, set_active_account
+from .paths import SCREENSHOTS_DIR, ensure_runtime_dirs
 
 
-def open_login(headless: bool, slow_mo_ms: int = 100) -> None:
+def _profile_for(account_id: str | None):
+    if account_id:
+        return set_active_account(account_id)
+    try:
+        return get_active_account()
+    except AccountConfigError:
+        return set_active_account("test")
+
+
+def open_login(headless: bool, slow_mo_ms: int = 100, account_id: str | None = None) -> None:
     ensure_runtime_dirs()
+    ref = _profile_for(account_id)
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
-            user_data_dir=str(INSTAGRAM_PROFILE_DIR),
+            user_data_dir=str(ref.profile_dir),
             headless=headless,
             slow_mo=slow_mo_ms,
             viewport={"width": 1280, "height": 900},
@@ -23,7 +34,8 @@ def open_login(headless: bool, slow_mo_ms: int = 100) -> None:
         )
         page = context.pages[0] if context.pages else context.new_page()
         page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
-        print(f"Instagram browser profile: {INSTAGRAM_PROFILE_DIR}")
+        print(f"Instagram account profile id: {ref.account_id}")
+        print(f"Instagram browser profile: {ref.profile_dir}")
         print("Log in manually in the opened browser window if visible.")
         print("When logged in, close the browser window or press Ctrl+C in this terminal.")
         try:
@@ -39,12 +51,13 @@ def _login_status_from_body(body: str) -> bool:
     return any(signal in body for signal in logged_in_signals) and not all(signal in body for signal in login_signals)
 
 
-def check_login() -> int:
+def check_login(account_id: str | None = None) -> int:
     ensure_runtime_dirs()
-    screenshot = SCREENSHOTS_DIR / "instagram-login-check.png"
+    ref = _profile_for(account_id)
+    screenshot = SCREENSHOTS_DIR / f"instagram-login-check-{ref.account_id}.png"
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
-            user_data_dir=str(INSTAGRAM_PROFILE_DIR),
+            user_data_dir=str(ref.profile_dir),
             headless=True,
             viewport={"width": 1280, "height": 900},
         )
@@ -62,23 +75,26 @@ def check_login() -> int:
     return 1
 
 
-def login_from_terminal() -> int:
+def login_from_terminal(account_id: str | None = None) -> int:
     """Log into Instagram in headless Chromium using credentials typed into the VM terminal.
 
     This keeps credentials out of Telegram/chat, source files, Git, and normal logs.
     Password input uses getpass so it is not echoed to the terminal.
     """
     ensure_runtime_dirs()
+    ref = _profile_for(account_id)
+    print(f"Using Instagram account profile id: {ref.account_id}")
+    print(f"Browser session will be stored at: {ref.profile_dir}")
     username = input("Instagram username/email/phone: ").strip()
     password = getpass.getpass("Instagram password (not echoed): ")
     if not username or not password:
         print("login_status=missing_credentials")
         return 2
 
-    screenshot = SCREENSHOTS_DIR / "instagram-terminal-login-result.png"
+    screenshot = SCREENSHOTS_DIR / f"instagram-terminal-login-result-{ref.account_id}.png"
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
-            user_data_dir=str(INSTAGRAM_PROFILE_DIR),
+            user_data_dir=str(ref.profile_dir),
             headless=True,
             viewport={"width": 1280, "height": 900},
             args=["--disable-blink-features=AutomationControlled"],
@@ -151,8 +167,11 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     open_cmd = sub.add_parser("open-login", help="Open Instagram in the dedicated persistent browser profile.")
     open_cmd.add_argument("--headless", action="store_true", help="Run headless. Manual login needs a visible browser, so this is mainly for diagnostics.")
-    sub.add_parser("terminal-login", help="Prompt for Instagram credentials in the VM terminal and log in headlessly without echoing the password.")
-    sub.add_parser("check-login", help="Check whether the dedicated browser profile appears logged in.")
+    open_cmd.add_argument("--account-id", help="Local account profile id. Defaults to active account, or 'test' if none exists.")
+    terminal_cmd = sub.add_parser("terminal-login", help="Prompt for Instagram credentials in the VM terminal and log in headlessly without echoing the password.")
+    terminal_cmd.add_argument("--account-id", help="Local account profile id. Defaults to active account, or 'test' if none exists.")
+    check_cmd = sub.add_parser("check-login", help="Check whether the dedicated browser profile appears logged in.")
+    check_cmd.add_argument("--account-id", help="Local account profile id. Defaults to active account, or 'test' if none exists.")
     args = parser.parse_args()
 
     if args.command == "open-login":
@@ -161,12 +180,12 @@ def main() -> int:
             print("This VM has no visible desktop DISPLAY in the current shell. Use a VNC/desktop session, SSH with X forwarding, or an approved browser-control surface, then run this command there:")
             print("  . .venv/bin/activate && PYTHONPATH=src python -m curation_bot.instagram_login open-login")
             return 2
-        open_login(headless=args.headless)
+        open_login(headless=args.headless, account_id=args.account_id)
         return 0
     if args.command == "terminal-login":
-        return login_from_terminal()
+        return login_from_terminal(account_id=args.account_id)
     if args.command == "check-login":
-        return check_login()
+        return check_login(account_id=args.account_id)
     return 2
 
 
