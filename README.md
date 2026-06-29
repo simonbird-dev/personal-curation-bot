@@ -64,3 +64,22 @@ PYTHONPATH=src python -m curation_bot.instagram_login terminal-login
 PYTHONPATH=src python -m curation_bot.instagram_accounts_cli set-active --account-id main
 PYTHONPATH=src python -m curation_bot.instagram_login terminal-login
 ```
+
+## Instagram draft preparation spike
+
+The live browser automation command uploads prepared media into Instagram web and stops before the final Share/Post action.
+
+Safety boundary: it may click through upload/crop/filter screens, but it must not click final Share/Post.
+
+```bash
+# check whether the active browser profile is logged in
+PYTHONPATH=src python -m curation_bot.instagram_automation check-session
+
+# prepare a draft from a package and explicit media file, stopping before final Share/Post
+PYTHONPATH=src python -m curation_bot.instagram_automation prepare-draft \
+  /path/to/draft_package \
+  --media /path/to/image-or-video \
+  --caption "Test draft from personal curation bot"
+```
+
+A package can also include media files under `package/media/`; then `--media` is optional.

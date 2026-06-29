@@ -5,7 +5,11 @@ import unittest
 from pathlib import Path
 
 from curation_bot.core import ingest_link
-from curation_bot.instagram_automation import InstagramAutomationError, plan_browser_draft_automation
+from curation_bot.instagram_automation import (
+    InstagramAutomationError,
+    plan_browser_draft_automation,
+    resolve_draft_media,
+)
 
 
 class InstagramAutomationBoundaryTests(unittest.TestCase):
@@ -25,6 +29,31 @@ class InstagramAutomationBoundaryTests(unittest.TestCase):
             with self.assertRaises(InstagramAutomationError) as ctx:
                 plan_browser_draft_automation(Path(tmp))
             self.assertEqual(ctx.exception.code, "missing_manifest")
+
+    def test_resolve_draft_media_requires_uploadable_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example1/", data_root=root)
+            result = ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example2/", data_root=root)
+            with self.assertRaises(InstagramAutomationError) as ctx:
+                resolve_draft_media(Path(result.draft_package or ""))
+            self.assertEqual(ctx.exception.code, "missing_media")
+
+    def test_resolve_draft_media_uses_package_media_and_caption_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example1/", data_root=root)
+            result = ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example2/", data_root=root)
+            package = Path(result.draft_package or "")
+            media_dir = package / "media"
+            media_dir.mkdir()
+            image = media_dir / "test.png"
+            image.write_bytes(b"not-a-real-image-but-path-validation-only")
+
+            draft_media = resolve_draft_media(package)
+            self.assertEqual(draft_media.media_paths, (image.resolve(),))
+            self.assertIn("finds draft", draft_media.caption)
+            self.assertIn("https://www.instagram.com/p/example1/", draft_media.caption)
 
 
 if __name__ == "__main__":
