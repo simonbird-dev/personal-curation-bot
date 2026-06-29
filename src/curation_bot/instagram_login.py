@@ -115,26 +115,36 @@ def login_from_terminal(account_id: str | None = None) -> int:
             'input[type="password"]',
         ]
 
-        def fill_first(selectors: list[str], value: str, field_name: str) -> None:
+        def type_first(selectors: list[str], value: str, field_name: str):
             last_error: Exception | None = None
             for selector in selectors:
                 try:
-                    page.locator(selector).first.fill(value, timeout=4000)
-                    return
+                    locator = page.locator(selector).first
+                    locator.click(timeout=4000)
+                    locator.fill("", timeout=4000)
+                    # Use real key events rather than fill-only because Instagram's
+                    # current login form sometimes leaves the submit control disabled
+                    # unless it sees typed input/change events.
+                    locator.type(value, delay=25, timeout=10000)
+                    return locator
                 except Exception as exc:
                     last_error = exc
             raise RuntimeError(f"Could not fill Instagram {field_name} field") from last_error
 
-        fill_first(username_selectors, username, "username")
-        fill_first(password_selectors, password, "password")
+        type_first(username_selectors, username, "username")
+        password_field = type_first(password_selectors, password, "password")
         try:
-            page.get_by_role("button", name="Log in").click(timeout=5000)
+            page.locator('input[type="submit"]').first.wait_for(state="attached", timeout=5000)
+            page.wait_for_timeout(1000)
+            # Pressing Enter from the password field is closest to a human login
+            # and works even when the visual submit button is not exposed as a role.
+            password_field.press("Enter", timeout=5000)
         except Exception:
             try:
                 page.locator('input[type="submit"]').first.click(timeout=5000)
             except Exception:
                 page.keyboard.press("Enter")
-        page.wait_for_timeout(8000)
+        page.wait_for_timeout(10000)
 
         body = page.locator("body").inner_text(timeout=8000)
         if "two-factor" in page.url.lower() or "security code" in body.lower() or "confirmation code" in body.lower():
