@@ -103,15 +103,37 @@ def login_from_terminal(account_id: str | None = None) -> int:
         page.goto("https://www.instagram.com/accounts/login/", wait_until="domcontentloaded")
         page.wait_for_timeout(2000)
 
+        username_selectors = [
+            'input[name="username"]',
+            'input[name="email"]',
+            'input[autocomplete*="username"]',
+            'input[type="text"]',
+        ]
+        password_selectors = [
+            'input[name="password"]',
+            'input[name="pass"]',
+            'input[type="password"]',
+        ]
+
+        def fill_first(selectors: list[str], value: str, field_name: str) -> None:
+            last_error: Exception | None = None
+            for selector in selectors:
+                try:
+                    page.locator(selector).first.fill(value, timeout=4000)
+                    return
+                except Exception as exc:
+                    last_error = exc
+            raise RuntimeError(f"Could not fill Instagram {field_name} field") from last_error
+
+        fill_first(username_selectors, username, "username")
+        fill_first(password_selectors, password, "password")
         try:
-            page.get_by_label("Phone number, username, or email").fill(username, timeout=8000)
-        except PlaywrightTimeoutError:
-            page.locator('input[name="username"]').fill(username, timeout=8000)
-        try:
-            page.get_by_label("Password").fill(password, timeout=8000)
-        except PlaywrightTimeoutError:
-            page.locator('input[name="password"]').fill(password, timeout=8000)
-        page.get_by_role("button", name="Log in").click(timeout=8000)
+            page.get_by_role("button", name="Log in").click(timeout=5000)
+        except Exception:
+            try:
+                page.locator('input[type="submit"]').first.click(timeout=5000)
+            except Exception:
+                page.keyboard.press("Enter")
         page.wait_for_timeout(8000)
 
         body = page.locator("body").inner_text(timeout=8000)
