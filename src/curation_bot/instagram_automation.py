@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .core import check_package_readiness
 from .instagram_accounts import AccountConfigError, InstagramAccountRef, get_active_account, set_active_account
 from .paths import SCREENSHOTS_DIR, ensure_runtime_dirs
 
@@ -63,6 +64,12 @@ def plan_browser_draft_automation(package_dir: Path) -> DraftAutomationPlan:
     manifest = load_manifest(package_dir)
     if manifest.get("status") != "ready_for_manual_instagram_posting":
         raise InstagramAutomationError("package_not_ready", "Package is not marked ready for Instagram preparation.")
+    readiness = check_package_readiness(package_dir)
+    if not readiness.package_ready_for_instagram_draft:
+        detail = readiness.safe_next_step
+        if readiness.blockers:
+            detail = f"{detail} Blockers: {'; '.join(readiness.blockers)}"
+        raise InstagramAutomationError("package_media_not_ready", detail)
     item_count = int(manifest.get("item_count", 0))
     if item_count < 1:
         raise InstagramAutomationError("empty_package", "Package contains no items.")

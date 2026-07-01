@@ -118,6 +118,8 @@ PYTHONPATH=src python -m curation_bot.instagram_login terminal-login
 
 The live browser automation command uploads prepared media into Instagram web and stops before the final Share/Post action.
 
+Before it opens Instagram, `prepare-draft` runs the package readiness gate. It refuses incomplete packages until `check-package-readiness` reports ready, so browser automation cannot silently upload the wrong slide, a missing file, or an unfulfilled media plan.
+
 Safety boundary: it may click through upload/crop/filter screens, but it must not click final Share/Post.
 
 ```bash
