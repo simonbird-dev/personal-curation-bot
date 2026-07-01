@@ -115,6 +115,35 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def expected_media_extension(selected_media: dict[str, Any]) -> str:
+    kind = str(selected_media.get("media_url_kind_for_future_capture") or "")
+    media_type = str(selected_media.get("type") or "").lower()
+    if kind == "videoUrl" or "video" in media_type:
+        return ".mp4"
+    if "image" in kind or "image" in media_type:
+        return ".jpg"
+    return ".media"
+
+
+def build_media_plan_entry(*, item: dict[str, Any], position: int, package_dir: Path) -> dict[str, Any] | None:
+    selected_media = item.get("selected_media")
+    if not isinstance(selected_media, dict):
+        return None
+    shortcode = selected_media.get("shortcode") or item.get("item_id")
+    safe_shortcode = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(shortcode)).strip("-") or f"item-{position:02d}"
+    expected_relative_path = Path("media") / f"{position:02d}-{safe_shortcode}{expected_media_extension(selected_media)}"
+    return {
+        "position": position,
+        "item_id": item["item_id"],
+        "selected_media": selected_media,
+        "capture_record_path": item.get("capture_record_path"),
+        "expected_media_path": str(package_dir / expected_relative_path),
+        "expected_media_relative_path": expected_relative_path.as_posix(),
+        "status": "not_downloaded",
+        "download_boundary": "No live Apify call, raw media URL, Instagram login, browser automation, or media download has been performed for this package.",
+    }
+
+
 def queue_item_and_maybe_package(
     *,
     category: str,
@@ -254,6 +283,7 @@ def create_draft_package(*, category: str, data_root: Path, target_count: int, c
     package_dir.mkdir(parents=True, exist_ok=False)
 
     manifest_items = []
+    media_plan_items = []
     for index, item_path in enumerate(selected, start=1):
         item = json.loads(item_path.read_text(encoding="utf-8"))
         item["status"] = "packaged"
@@ -263,11 +293,21 @@ def create_draft_package(*, category: str, data_root: Path, target_count: int, c
         package_item_path = package_dir / f"{index:02d}-{item_path.name}"
         write_json(package_item_path, item)
         shutil.move(str(item_path), str(paths["archive"] / item_path.name))
-        manifest_items.append({
+        manifest_item = {
             "position": index,
             "item_id": item["item_id"],
             "url": item["url"],
-        })
+        }
+        if item.get("capture_record_path"):
+            manifest_item["capture_record_path"] = item["capture_record_path"]
+        if isinstance(item.get("selected_media"), dict):
+            manifest_item["selected_media"] = item["selected_media"]
+            media_plan_entry = build_media_plan_entry(item=item, position=index, package_dir=package_dir)
+            if media_plan_entry is not None:
+                media_plan_items.append(media_plan_entry)
+                manifest_item["expected_media_relative_path"] = media_plan_entry["expected_media_relative_path"]
+                manifest_item["media_status"] = media_plan_entry["status"]
+        manifest_items.append(manifest_item)
 
     manifest = {
         "schema_version": "personal_curation_draft_package_v0_1",
@@ -279,6 +319,21 @@ def create_draft_package(*, category: str, data_root: Path, target_count: int, c
         "important_boundary": "This is a local prepared package, not an Instagram native app draft and not an automated post.",
         "items": manifest_items,
     }
+    if media_plan_items:
+        media_dir = package_dir / "media"
+        media_dir.mkdir(exist_ok=True)
+        media_plan = {
+            "schema_version": "personal_curation_media_plan_v0_1",
+            "package_id": package_id,
+            "category": category,
+            "created_at": created_at,
+            "status": "media_not_downloaded",
+            "important_boundary": "This file is a storage/download contract only. It contains expected local media paths and selected-media metadata, not raw media URLs or downloaded files.",
+            "items": media_plan_items,
+        }
+        write_json(package_dir / "media_manifest.json", media_plan)
+        manifest["media_manifest_path"] = str(package_dir / "media_manifest.json")
+        manifest["media_status"] = "not_downloaded"
     write_json(package_dir / "manifest.json", manifest)
     return str(package_dir)
 

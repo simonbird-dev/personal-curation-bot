@@ -87,6 +87,49 @@ class ApifyCapturePipelineTests(unittest.TestCase):
             self.assertEqual(item["selected_media"]["shortcode"], "CHILD2")
             self.assertEqual(item["capture_record_path"], str(record_path))
 
+    def test_ingest_capture_record_package_manifest_preserves_selected_media_intent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset_path = root / "dataset.json"
+            dataset_path.write_text(json.dumps(DATASET), encoding="utf-8")
+            first_record = capture_from_dataset(
+                source_url="https://www.instagram.com/p/ABC123/?img_index=2",
+                selected_slide=2,
+                dataset_path=dataset_path,
+                data_root=root,
+                category="finds",
+                stream="/finds",
+            )
+            second_record = capture_from_dataset(
+                source_url="https://www.instagram.com/p/ABC123/?img_index=1",
+                selected_slide=1,
+                dataset_path=dataset_path,
+                data_root=root,
+                category="finds",
+                stream="/finds",
+            )
+
+            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
+            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+
+            self.assertTrue(result.threshold_reached)
+            manifest_path = Path(result.draft_package or "") / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            self.assertEqual(manifest["item_count"], 2)
+            items_by_shortcode = {item["selected_media"]["shortcode"]: item for item in manifest["items"]}
+            self.assertEqual(items_by_shortcode["CHILD2"]["capture_record_path"], str(first_record))
+            self.assertEqual(items_by_shortcode["CHILD2"]["selected_media"]["media_url_kind_for_future_capture"], "videoUrl")
+            self.assertTrue(items_by_shortcode["CHILD2"]["expected_media_relative_path"].endswith("-CHILD2.mp4"))
+            self.assertEqual(items_by_shortcode["CHILD2"]["media_status"], "not_downloaded")
+            self.assertEqual(items_by_shortcode["CHILD1"]["capture_record_path"], str(second_record))
+            media_manifest = json.loads((Path(result.draft_package or "") / "media_manifest.json").read_text())
+            self.assertEqual(media_manifest["schema_version"], "personal_curation_media_plan_v0_1")
+            self.assertEqual(media_manifest["status"], "media_not_downloaded")
+            self.assertIn("not raw media URLs", media_manifest["important_boundary"])
+            media_items_by_shortcode = {item["selected_media"]["shortcode"]: item for item in media_manifest["items"]}
+            self.assertTrue(media_items_by_shortcode["CHILD2"]["expected_media_relative_path"].endswith("-CHILD2.mp4"))
+            self.assertTrue(media_items_by_shortcode["CHILD1"]["expected_media_relative_path"].endswith("-CHILD1.jpg"))
+
     def test_capture_rejects_out_of_range_selected_slide(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
