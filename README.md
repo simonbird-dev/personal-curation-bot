@@ -90,6 +90,23 @@ PYTHONPATH=src python3 -m curation_bot.cli check-package-readiness \
 
 The command reports whether all selected media files exist under `package/media/`, lists blockers such as missing files or unsafe media paths, and returns the safe next step. It performs no browser, account, provider, or download action.
 
+## Manual review pack
+
+For a no-account-risk handoff, build a local review pack from any draft package:
+
+```bash
+PYTHONPATH=src python3 -m curation_bot.cli build-manual-review-pack \
+  --package /tmp/curation-demo/draft_packages/finds/PACKAGE_ID
+```
+
+Outputs under `draft_package/manual_review/`:
+
+- `caption.txt` — default caption draft from local package metadata.
+- `media_checklist.json` — readiness state, blockers, warnings, and selected-media paths.
+- `manual_review_pack.md` — human-readable review/checklist artefact.
+
+This command performs no Instagram login, browser automation, Apify live call, external media download, or publish/share action.
+
 ## Instagram account switching
 
 The bot separates saved content/category state from Instagram login state.

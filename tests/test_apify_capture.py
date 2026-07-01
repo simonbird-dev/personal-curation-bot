@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from curation_bot.apify_capture import CaptureError, capture_from_dataset
-from curation_bot.core import CurationBotError, check_package_readiness, execute_media_download, ingest_capture_record
+from curation_bot.core import CurationBotError, build_manual_review_pack, check_package_readiness, execute_media_download, ingest_capture_record
 
 
 DATASET = [
@@ -393,6 +393,57 @@ class ApifyCapturePipelineTests(unittest.TestCase):
 
             self.assertFalse(result.package_ready_for_instagram_draft)
             self.assertTrue(any("Unsafe media path" in blocker for blocker in result.blockers))
+
+    def test_manual_review_pack_writes_caption_checklist_and_boundary_without_ready_media(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = self.build_two_item_package(root)
+
+            result = build_manual_review_pack(package)
+
+            self.assertEqual(result.media_status, "media_not_downloaded")
+            self.assertFalse(result.package_ready_for_instagram_draft)
+            self.assertTrue(Path(result.review_pack_path).exists())
+            self.assertTrue(Path(result.caption_path).exists())
+            self.assertTrue(Path(result.checklist_path).exists())
+            caption = Path(result.caption_path).read_text(encoding="utf-8")
+            self.assertIn("finds draft prepared", caption)
+            self.assertIn("https://www.instagram.com/p/ABC123/", caption)
+            review_text = Path(result.review_pack_path).read_text(encoding="utf-8")
+            self.assertIn("does not log into Instagram", review_text)
+            self.assertIn("Missing downloaded media for CHILD2", review_text)
+            checklist = json.loads(Path(result.checklist_path).read_text(encoding="utf-8"))
+            self.assertEqual(checklist["schema_version"], "personal_curation_manual_review_checklist_v0_1")
+            self.assertIn("no Instagram login", checklist["boundary"])
+
+    def test_manual_review_pack_reports_ready_after_all_local_fixture_media_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = self.build_two_item_package(root)
+            video_fixture = root / "fixture.mp4"
+            image_fixture = root / "fixture.jpg"
+            video_fixture.write_bytes(b"fake-video")
+            image_fixture.write_bytes(b"fake-image")
+            execute_media_download(
+                package_dir=package,
+                provider="local-fixture",
+                fixture_file=video_fixture,
+                selected_shortcode="CHILD2",
+            )
+            execute_media_download(
+                package_dir=package,
+                provider="local-fixture",
+                fixture_file=image_fixture,
+                selected_shortcode="CHILD1",
+            )
+
+            result = build_manual_review_pack(package)
+
+            self.assertTrue(result.package_ready_for_instagram_draft)
+            self.assertEqual(result.media_status, "media_downloaded")
+            checklist = json.loads(Path(result.checklist_path).read_text(encoding="utf-8"))
+            self.assertEqual(checklist["blockers"], [])
+            self.assertTrue(all(item["file_exists"] for item in checklist["items"]))
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .apify_capture import CaptureError, capture_from_dataset
-from .core import CurationBotError, check_package_readiness, execute_media_download, ingest_capture_record, ingest_link, status
+from .core import CurationBotError, build_manual_review_pack, check_package_readiness, execute_media_download, ingest_capture_record, ingest_link, status
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     readiness = sub.add_parser("check-package-readiness", help="Check whether a prepared package has all media files needed before Instagram draft automation.")
     readiness.add_argument("--package", dest="package_dir", type=Path, required=True, help="Draft package directory containing manifest.json and media_manifest.json")
+
+    review = sub.add_parser("build-manual-review-pack", help="Write local caption/checklist/review files for manual posting. No browser, account, live Apify, download, or publish action is performed.")
+    review.add_argument("--package", dest="package_dir", type=Path, required=True, help="Draft package directory containing manifest.json and media_manifest.json")
 
     sub.add_parser("status", help="Show local queue/package status.")
     return parser
@@ -94,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "check-package-readiness":
             result = check_package_readiness(package_dir=args.package_dir)
+            print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+            return 0
+        if args.command == "build-manual-review-pack":
+            result = build_manual_review_pack(package_dir=args.package_dir)
             print(json.dumps(result.__dict__, indent=2, sort_keys=True))
             return 0
         if args.command == "status":

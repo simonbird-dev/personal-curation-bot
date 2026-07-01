@@ -52,6 +52,18 @@ class PackageReadinessResult:
     items: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class ManualReviewPackResult:
+    package_dir: str
+    review_pack_path: str
+    caption_path: str
+    checklist_path: str
+    package_ready_for_instagram_draft: bool
+    media_status: str
+    blockers: list[str]
+    safe_next_step: str
+
+
 def load_capture_record(path: Path) -> dict[str, Any]:
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -531,6 +543,119 @@ def check_package_readiness(package_dir: Path) -> PackageReadinessResult:
         warnings=warnings,
         safe_next_step=safe_next_step,
         items=readiness_items,
+    )
+
+
+def _load_package_manifest_for_review(package_dir: Path) -> dict[str, Any]:
+    manifest_path = package_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise CurationBotError("manifest_missing", f"Draft package manifest not found: {manifest_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise CurationBotError("manifest_bad_json", f"Draft package manifest is not valid JSON: {manifest_path}: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise CurationBotError("manifest_bad_shape", "Draft package manifest must be a JSON object.")
+    if manifest.get("schema_version") != "personal_curation_draft_package_v0_1":
+        raise CurationBotError("unsupported_manifest", "Expected personal_curation_draft_package_v0_1.")
+    return manifest
+
+
+def build_manual_caption(manifest: dict[str, Any]) -> str:
+    """Build a safe default caption from local package metadata only."""
+    category = str(manifest.get("category") or "curation")
+    items = manifest.get("items", [])
+    source_lines: list[str] = []
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and item.get("url"):
+                source_lines.append(str(item["url"]))
+    if source_lines:
+        return f"{category} draft prepared by personal curation bot.\n\nSources:\n" + "\n".join(source_lines) + "\n"
+    return f"{category} draft prepared by personal curation bot.\n"
+
+
+def build_manual_review_markdown(*, manifest: dict[str, Any], readiness: PackageReadinessResult, caption: str) -> str:
+    lines = [
+        "# Manual Instagram Posting Review Pack",
+        "",
+        "This is a local review artefact only. It does not log into Instagram, open a browser, call Apify live, download media, or publish/share anything.",
+        "",
+        f"- Package: `{manifest.get('package_id')}`",
+        f"- Category: `{manifest.get('category')}`",
+        f"- Item count: `{manifest.get('item_count')}`",
+        f"- Media status: `{readiness.media_status}`",
+        f"- Ready for Instagram draft automation: `{readiness.package_ready_for_instagram_draft}`",
+        f"- Safe next step: {readiness.safe_next_step}",
+        "",
+        "## Caption draft",
+        "",
+        "```text",
+        caption.rstrip(),
+        "```",
+        "",
+        "## Media checklist",
+        "",
+    ]
+    if readiness.items:
+        for item in readiness.items:
+            status_label = "present" if item.get("file_exists") else "missing"
+            lines.append(f"- `{item.get('shortcode')}` — {status_label} — `{item.get('expected_media_relative_path')}`")
+    else:
+        lines.append("- No selected-media checklist items found.")
+    if readiness.blockers:
+        lines.extend(["", "## Blockers", ""])
+        lines.extend(f"- {blocker}" for blocker in readiness.blockers)
+    if readiness.warnings:
+        lines.extend(["", "## Warnings", ""])
+        lines.extend(f"- {warning}" for warning in readiness.warnings)
+    lines.extend([
+        "",
+        "## Boundary",
+        "",
+        "Do not run browser/account automation from this pack unless a separate approved lane confirms package readiness, account safety, and the stop-before-share boundary.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def build_manual_review_pack(package_dir: Path) -> ManualReviewPackResult:
+    """Create a human-readable local posting pack without touching any live account."""
+    manifest = _load_package_manifest_for_review(package_dir)
+    readiness = check_package_readiness(package_dir)
+    caption = build_manual_caption(manifest)
+    review_dir = package_dir / "manual_review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    caption_path = review_dir / "caption.txt"
+    checklist_path = review_dir / "media_checklist.json"
+    review_pack_path = review_dir / "manual_review_pack.md"
+    caption_path.write_text(caption, encoding="utf-8")
+    checklist_payload = {
+        "schema_version": "personal_curation_manual_review_checklist_v0_1",
+        "package_id": manifest.get("package_id"),
+        "category": manifest.get("category"),
+        "package_ready_for_instagram_draft": readiness.package_ready_for_instagram_draft,
+        "media_status": readiness.media_status,
+        "blockers": readiness.blockers,
+        "warnings": readiness.warnings,
+        "safe_next_step": readiness.safe_next_step,
+        "items": readiness.items,
+        "boundary": "Local review pack only; no Instagram login, browser automation, Apify live call, external media download, or publish/share action performed.",
+    }
+    write_json(checklist_path, checklist_payload)
+    review_pack_path.write_text(
+        build_manual_review_markdown(manifest=manifest, readiness=readiness, caption=caption),
+        encoding="utf-8",
+    )
+    return ManualReviewPackResult(
+        package_dir=str(package_dir),
+        review_pack_path=str(review_pack_path),
+        caption_path=str(caption_path),
+        checklist_path=str(checklist_path),
+        package_ready_for_instagram_draft=readiness.package_ready_for_instagram_draft,
+        media_status=readiness.media_status,
+        blockers=readiness.blockers,
+        safe_next_step=readiness.safe_next_step,
     )
 
 
