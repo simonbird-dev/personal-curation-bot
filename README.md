@@ -41,6 +41,27 @@ python3 -m curation_bot.cli status
 
 Default storage root is `./data/`.
 
+## Selected-media capture without Instagram login
+
+The no-login pipeline can now turn an existing Apify `detailedData` dataset into a sanitised capture record and queue that selected media into the bot.
+
+This command **does not log into Instagram, open a browser, post, download media, or call Apify live**. It only uses a dataset JSON file that already exists on the VM.
+
+```bash
+PYTHONPATH=src python3 -m curation_bot.cli --data-root /tmp/curation-demo capture-apify \
+  --category finds \
+  --dataset /path/to/apify-detailedData-dataset.json \
+  --source-url 'https://www.instagram.com/p/ABC123/?img_index=2' \
+  --selected-slide 2 \
+  --stream /finds
+```
+
+Outputs:
+
+- `capture_records/<category>/<shortcode>-slideN.json` — sanitised metadata contract, with raw media URLs redacted.
+- `queues/<category>/*.json` — queued bot item referencing the capture record.
+- A draft package is still created automatically when the category threshold is reached.
+
 ## Instagram account switching
 
 The bot separates saved content/category state from Instagram login state.

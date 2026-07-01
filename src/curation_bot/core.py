@@ -32,6 +32,29 @@ class IngestResult:
     item_id: str
 
 
+def load_capture_record(path: Path) -> dict[str, Any]:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise CurationBotError("capture_record_missing", f"Capture record not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise CurationBotError("capture_record_bad_json", f"Capture record is not valid JSON: {path}: {exc}") from exc
+    if not isinstance(record, dict):
+        raise CurationBotError("capture_record_bad_shape", "Capture record must be a JSON object.")
+    if record.get("schema_version") != "apify_selected_media_capture_record_v0_1":
+        raise CurationBotError("unsupported_capture_record", "Expected apify_selected_media_capture_record_v0_1.")
+    source = record.get("source")
+    selected = record.get("selected_media")
+    quality = record.get("quality_flags")
+    if not isinstance(source, dict) or not isinstance(selected, dict) or not isinstance(quality, dict):
+        raise CurationBotError("capture_record_bad_shape", "Capture record is missing source, selected_media, or quality_flags.")
+    if quality.get("raw_media_urls_redacted") is not True:
+        raise CurationBotError("unsafe_capture_record", "Capture record must redact raw media URLs before bot intake.")
+    if not isinstance(source.get("source_url"), str) or not source["source_url"]:
+        raise CurationBotError("capture_record_missing_source_url", "Capture record is missing source.source_url.")
+    return record
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -92,6 +115,44 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def queue_item_and_maybe_package(
+    *,
+    category: str,
+    item: dict[str, Any],
+    data_root: Path,
+    config_path: Path,
+    created_at: str,
+) -> IngestResult:
+    categories = load_categories(config_path)
+    if category not in categories:
+        raise CurationBotError("unknown_category", f"Unknown category: {category}")
+
+    paths = ensure_dirs(data_root, category)
+    item_path = paths["queue"] / f"{item['item_id']}.json"
+    write_json(item_path, item)
+
+    items = queue_items(data_root, category)
+    target_count = categories[category]["target_count"]
+    draft_package = None
+    threshold_reached = len(items) >= target_count
+    if threshold_reached:
+        draft_package = create_draft_package(
+            category=category,
+            data_root=data_root,
+            target_count=target_count,
+            created_at=created_at,
+        )
+
+    return IngestResult(
+        category=category,
+        queue_count=len(queue_items(data_root, category)),
+        target_count=target_count,
+        threshold_reached=threshold_reached,
+        draft_package=draft_package,
+        item_id=item["item_id"],
+    )
+
+
 def ingest_link(
     *,
     category: str,
@@ -105,11 +166,8 @@ def ingest_link(
         raise CurationBotError("unknown_category", f"Unknown category: {category}")
 
     url = validate_supported_url(extract_first_url(text_or_url))
-    paths = ensure_dirs(data_root, category)
     now = utc_now_iso()
     item_id = f"{now.replace(':', '').replace('+', 'Z')}-{slugify_url(url)}"
-    item_path = paths["queue"] / f"{item_id}.json"
-
     item = {
         "schema_version": "personal_curation_link_item_v0_1",
         "item_id": item_id,
@@ -124,27 +182,62 @@ def ingest_link(
             "instagram_draft_status": "not_attempted",
         },
     }
-    write_json(item_path, item)
-
-    items = queue_items(data_root, category)
-    target_count = categories[category]["target_count"]
-    draft_package = None
-    threshold_reached = len(items) >= target_count
-    if threshold_reached:
-        draft_package = create_draft_package(
-            category=category,
-            data_root=data_root,
-            target_count=target_count,
-            created_at=now,
-        )
-
-    return IngestResult(
+    return queue_item_and_maybe_package(
         category=category,
-        queue_count=len(queue_items(data_root, category)),
-        target_count=target_count,
-        threshold_reached=threshold_reached,
-        draft_package=draft_package,
-        item_id=item_id,
+        item=item,
+        data_root=data_root,
+        config_path=config_path,
+        created_at=now,
+    )
+
+
+def ingest_capture_record(
+    *,
+    category: str,
+    capture_record_path: Path,
+    data_root: Path,
+    config_path: Path = DEFAULT_CONFIG_PATH,
+    source: str = "apify_capture",
+) -> IngestResult:
+    categories = load_categories(config_path)
+    if category not in categories:
+        raise CurationBotError("unknown_category", f"Unknown category: {category}")
+
+    record = load_capture_record(capture_record_path)
+    record_source = record["source"]
+    selected_media = record["selected_media"]
+    url = validate_supported_url(record_source["source_url"])
+    now = utc_now_iso()
+    shortcode = record_source.get("source_shortcode") or slugify_url(url)
+    selected_index = selected_media.get("selected_index_1based")
+    item_id = f"{now.replace(':', '').replace('+', 'Z')}-{shortcode}-slide{selected_index}"
+    item = {
+        "schema_version": "personal_curation_link_item_v0_1",
+        "item_id": item_id,
+        "category": category,
+        "source": source,
+        "url": url,
+        "status": "queued",
+        "created_at": now,
+        "capture_record_path": str(capture_record_path),
+        "selected_media": {
+            "selected_index_1based": selected_media.get("selected_index_1based"),
+            "shortcode": selected_media.get("shortcode"),
+            "type": selected_media.get("type"),
+            "media_url_kind_for_future_capture": selected_media.get("media_url_kind_for_future_capture"),
+        },
+        "processing": {
+            "capture_status": "captured",
+            "media_status": "not_downloaded",
+            "instagram_draft_status": "not_attempted",
+        },
+    }
+    return queue_item_and_maybe_package(
+        category=category,
+        item=item,
+        data_root=data_root,
+        config_path=config_path,
+        created_at=now,
     )
 
 
