@@ -32,6 +32,15 @@ class IngestResult:
     item_id: str
 
 
+@dataclass(frozen=True)
+class MediaDownloadResult:
+    package_dir: str
+    provider: str
+    copied_count: int
+    media_status: str
+    copied_files: list[str]
+
+
 def load_capture_record(path: Path) -> dict[str, Any]:
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -336,6 +345,126 @@ def create_draft_package(*, category: str, data_root: Path, target_count: int, c
         manifest["media_status"] = "not_downloaded"
     write_json(package_dir / "manifest.json", manifest)
     return str(package_dir)
+
+
+def load_media_manifest(package_dir: Path) -> dict[str, Any]:
+    manifest_path = package_dir / "media_manifest.json"
+    try:
+        media_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise CurationBotError("media_manifest_missing", f"Media manifest not found: {manifest_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise CurationBotError("media_manifest_bad_json", f"Media manifest is not valid JSON: {manifest_path}: {exc}") from exc
+    if not isinstance(media_manifest, dict) or media_manifest.get("schema_version") != "personal_curation_media_plan_v0_1":
+        raise CurationBotError("unsupported_media_manifest", "Expected personal_curation_media_plan_v0_1.")
+    if not isinstance(media_manifest.get("items"), list):
+        raise CurationBotError("media_manifest_bad_shape", "Media manifest is missing items list.")
+    return media_manifest
+
+
+def select_media_plan_items(media_manifest: dict[str, Any], selected_shortcode: str | None = None) -> list[dict[str, Any]]:
+    items = [item for item in media_manifest["items"] if isinstance(item, dict)]
+    if selected_shortcode is None:
+        if len(items) != 1:
+            raise CurationBotError(
+                "media_selection_required",
+                "Media manifest has multiple items; provide a selected shortcode before using a single local fixture file.",
+            )
+        return items
+
+    selected = []
+    for item in items:
+        selected_media = item.get("selected_media")
+        if isinstance(selected_media, dict) and selected_media.get("shortcode") == selected_shortcode:
+            selected.append(item)
+    if not selected:
+        raise CurationBotError("media_selection_not_found", f"No media plan item found for shortcode: {selected_shortcode}")
+    return selected
+
+
+def media_manifest_status(items: list[dict[str, Any]]) -> str:
+    if items and all(item.get("status") == "downloaded" for item in items):
+        return "media_downloaded"
+    if any(item.get("status") == "downloaded" for item in items):
+        return "media_partially_downloaded"
+    return "media_not_downloaded"
+
+
+def update_package_manifest_media_status(package_dir: Path, media_status: str) -> None:
+    manifest_path = package_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    if not isinstance(manifest, dict):
+        return
+    manifest["media_status"] = media_status.replace("media_", "")
+    downloaded_by_item_id = {}
+    media_manifest = load_media_manifest(package_dir)
+    for item in media_manifest["items"]:
+        if isinstance(item, dict):
+            downloaded_by_item_id[item.get("item_id")] = item.get("status")
+    for item in manifest.get("items", []):
+        if isinstance(item, dict) and item.get("item_id") in downloaded_by_item_id:
+            item["media_status"] = downloaded_by_item_id[item.get("item_id")]
+    write_json(manifest_path, manifest)
+
+
+def execute_media_download(
+    *,
+    package_dir: Path,
+    provider: str | None,
+    fixture_file: Path | None = None,
+    selected_shortcode: str | None = None,
+) -> MediaDownloadResult:
+    """Execute an approved media-source adapter.
+
+    Currently the only approved provider is local-fixture. This deliberately refuses
+    implicit/live providers so later Apify or browser-backed downloaders cannot be
+    smuggled in without an explicit provider boundary.
+    """
+    if not provider:
+        raise CurationBotError("media_provider_required", "Refusing media download without an explicit approved provider.")
+    if provider != "local-fixture":
+        raise CurationBotError("unsupported_media_provider", f"Unsupported media provider: {provider}")
+    if fixture_file is None:
+        raise CurationBotError("fixture_file_required", "local-fixture provider requires --fixture-file.")
+    if not fixture_file.exists() or not fixture_file.is_file():
+        raise CurationBotError("fixture_file_missing", f"Fixture file not found: {fixture_file}")
+
+    media_manifest = load_media_manifest(package_dir)
+    selected_items = select_media_plan_items(media_manifest, selected_shortcode=selected_shortcode)
+    copied_files = []
+    for item in selected_items:
+        expected_relative_path = item.get("expected_media_relative_path")
+        if not isinstance(expected_relative_path, str) or not expected_relative_path.startswith("media/"):
+            raise CurationBotError("unsafe_media_path", "Expected media path must be a relative path under media/.")
+        destination = package_dir / expected_relative_path
+        if destination.resolve().parent != (package_dir / "media").resolve():
+            raise CurationBotError("unsafe_media_path", "Expected media path must stay directly under the package media directory.")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(fixture_file, destination)
+        item["status"] = "downloaded"
+        item["provider"] = provider
+        item["source_fixture_file"] = str(fixture_file)
+        item["actual_media_path"] = str(destination)
+        item["actual_media_relative_path"] = expected_relative_path
+        item["download_boundary"] = "Local fixture file copied only; no live Apify call, raw media URL, Instagram login, browser automation, or external download was performed."
+        copied_files.append(str(destination))
+
+    media_status = media_manifest_status([item for item in media_manifest["items"] if isinstance(item, dict)])
+    media_manifest["status"] = media_status
+    media_manifest["last_provider"] = provider
+    media_manifest["important_boundary"] = "Media files marked downloaded only from an explicit approved provider. local-fixture copies a local test file and performs no live download."
+    write_json(package_dir / "media_manifest.json", media_manifest)
+    update_package_manifest_media_status(package_dir, media_status)
+    return MediaDownloadResult(
+        package_dir=str(package_dir),
+        provider=provider,
+        copied_count=len(copied_files),
+        media_status=media_status,
+        copied_files=copied_files,
+    )
 
 
 def status(data_root: Path, config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:

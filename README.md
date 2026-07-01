@@ -60,7 +60,24 @@ Outputs:
 
 - `capture_records/<category>/<shortcode>-slideN.json` — sanitised metadata contract, with raw media URLs redacted.
 - `queues/<category>/*.json` — queued bot item referencing the capture record.
+- `draft_packages/<category>/<package-id>/media_manifest.json` — selected-media storage contract.
 - A draft package is still created automatically when the category threshold is reached.
+
+## Media download executor boundary
+
+The package media executor now refuses to run unless an explicit approved provider is supplied. The only supported provider in this slice is `local-fixture`, which copies a local test file into the package media path and marks that selected media item as downloaded.
+
+This command **does not call Apify live, use raw media URLs, log into Instagram, open a browser, or download anything from the internet**.
+
+```bash
+PYTHONPATH=src python3 -m curation_bot.cli execute-media-download \
+  --package /tmp/curation-demo/draft_packages/finds/PACKAGE_ID \
+  --provider local-fixture \
+  --fixture-file /path/to/local-test-file.mp4 \
+  --selected-shortcode CHILD2
+```
+
+For multi-item packages, `--selected-shortcode` is required so one fixture file cannot silently be copied to the wrong selected slide.
 
 ## Instagram account switching
 

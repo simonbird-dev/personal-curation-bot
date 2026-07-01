@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .apify_capture import CaptureError, capture_from_dataset
-from .core import CurationBotError, ingest_capture_record, ingest_link, status
+from .core import CurationBotError, execute_media_download, ingest_capture_record, ingest_link, status
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     capture_record.add_argument("--category", required=True, help="Category, e.g. finds/live/fashion")
     capture_record.add_argument("--capture-record", type=Path, required=True, help="Path to apify_selected_media_capture_record_v0_1 JSON")
     capture_record.add_argument("--source", default="apify_capture", help="Source label")
+
+    media = sub.add_parser("execute-media-download", help="Execute an explicit approved media provider for a prepared package. Currently only local-fixture is supported.")
+    media.add_argument("--package", dest="package_dir", type=Path, required=True, help="Draft package directory containing media_manifest.json")
+    media.add_argument("--provider", required=True, help="Approved provider. Currently: local-fixture")
+    media.add_argument("--fixture-file", type=Path, help="Local fixture file to copy when provider=local-fixture")
+    media.add_argument("--selected-shortcode", help="Required when the package has multiple media items and one fixture file is supplied")
 
     sub.add_parser("status", help="Show local queue/package status.")
     return parser
@@ -71,6 +77,15 @@ def main(argv: list[str] | None = None) -> int:
                 capture_record_path=args.capture_record,
                 data_root=data_root,
                 source=args.source,
+            )
+            print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+            return 0
+        if args.command == "execute-media-download":
+            result = execute_media_download(
+                package_dir=args.package_dir,
+                provider=args.provider,
+                fixture_file=args.fixture_file,
+                selected_shortcode=args.selected_shortcode,
             )
             print(json.dumps(result.__dict__, indent=2, sort_keys=True))
             return 0

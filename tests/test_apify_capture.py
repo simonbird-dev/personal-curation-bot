@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from curation_bot.apify_capture import CaptureError, capture_from_dataset
-from curation_bot.core import CurationBotError, ingest_capture_record
+from curation_bot.core import CurationBotError, execute_media_download, ingest_capture_record
 
 
 DATASET = [
@@ -161,6 +161,139 @@ class ApifyCapturePipelineTests(unittest.TestCase):
             with self.assertRaises(CurationBotError) as ctx:
                 ingest_capture_record(category="finds", capture_record_path=record_path, data_root=root)
             self.assertEqual(ctx.exception.code, "unsafe_capture_record")
+    def test_media_download_refuses_without_explicit_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "package"
+            package.mkdir()
+            (package / "media_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "personal_curation_media_plan_v0_1",
+                        "items": [
+                            {
+                                "item_id": "item-1",
+                                "selected_media": {"shortcode": "CHILD2"},
+                                "expected_media_relative_path": "media/01-CHILD2.mp4",
+                                "status": "not_downloaded",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fixture = root / "fixture.mp4"
+            fixture.write_bytes(b"fake-video")
+
+            with self.assertRaises(CurationBotError) as ctx:
+                execute_media_download(package_dir=package, provider=None, fixture_file=fixture)
+            self.assertEqual(ctx.exception.code, "media_provider_required")
+
+    def test_media_download_refuses_unapproved_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "package"
+            package.mkdir()
+            (package / "media_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "personal_curation_media_plan_v0_1",
+                        "items": [
+                            {
+                                "item_id": "item-1",
+                                "selected_media": {"shortcode": "CHILD2"},
+                                "expected_media_relative_path": "media/01-CHILD2.mp4",
+                                "status": "not_downloaded",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fixture = root / "fixture.mp4"
+            fixture.write_bytes(b"fake-video")
+
+            with self.assertRaises(CurationBotError) as ctx:
+                execute_media_download(package_dir=package, provider="apify-live", fixture_file=fixture)
+            self.assertEqual(ctx.exception.code, "unsupported_media_provider")
+
+    def test_local_fixture_media_download_marks_selected_item_downloaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset_path = root / "dataset.json"
+            dataset_path.write_text(json.dumps(DATASET), encoding="utf-8")
+            first_record = capture_from_dataset(
+                source_url="https://www.instagram.com/p/ABC123/?img_index=2",
+                selected_slide=2,
+                dataset_path=dataset_path,
+                data_root=root,
+                category="finds",
+                stream="/finds",
+            )
+            second_record = capture_from_dataset(
+                source_url="https://www.instagram.com/p/ABC123/?img_index=1",
+                selected_slide=1,
+                dataset_path=dataset_path,
+                data_root=root,
+                category="finds",
+                stream="/finds",
+            )
+            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
+            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+            package_dir = Path(result.draft_package or "")
+            fixture = root / "fixture.mp4"
+            fixture.write_bytes(b"fake-video")
+
+            download = execute_media_download(
+                package_dir=package_dir,
+                provider="local-fixture",
+                fixture_file=fixture,
+                selected_shortcode="CHILD2",
+            )
+
+            self.assertEqual(download.copied_count, 1)
+            self.assertEqual(download.media_status, "media_partially_downloaded")
+            copied_path = Path(download.copied_files[0])
+            self.assertEqual(copied_path.read_bytes(), b"fake-video")
+            self.assertTrue(copied_path.name.endswith("-CHILD2.mp4"))
+            media_manifest = json.loads((package_dir / "media_manifest.json").read_text())
+            items_by_shortcode = {item["selected_media"]["shortcode"]: item for item in media_manifest["items"]}
+            self.assertEqual(items_by_shortcode["CHILD2"]["status"], "downloaded")
+            self.assertEqual(items_by_shortcode["CHILD2"]["provider"], "local-fixture")
+            self.assertEqual(items_by_shortcode["CHILD1"]["status"], "not_downloaded")
+            self.assertIn("no live Apify call", items_by_shortcode["CHILD2"]["download_boundary"])
+            manifest = json.loads((package_dir / "manifest.json").read_text())
+            manifest_items_by_shortcode = {item["selected_media"]["shortcode"]: item for item in manifest["items"]}
+            self.assertEqual(manifest["media_status"], "partially_downloaded")
+            self.assertEqual(manifest_items_by_shortcode["CHILD2"]["media_status"], "downloaded")
+
+    def test_local_fixture_requires_shortcode_for_multi_item_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset_path = root / "dataset.json"
+            dataset_path.write_text(json.dumps(DATASET), encoding="utf-8")
+            first_record = capture_from_dataset(
+                source_url="https://www.instagram.com/p/ABC123/?img_index=2",
+                selected_slide=2,
+                dataset_path=dataset_path,
+                data_root=root,
+                category="finds",
+            )
+            second_record = capture_from_dataset(
+                source_url="https://www.instagram.com/p/ABC123/?img_index=1",
+                selected_slide=1,
+                dataset_path=dataset_path,
+                data_root=root,
+                category="finds",
+            )
+            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
+            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+            fixture = root / "fixture.mp4"
+            fixture.write_bytes(b"fake-video")
+
+            with self.assertRaises(CurationBotError) as ctx:
+                execute_media_download(package_dir=Path(result.draft_package or ""), provider="local-fixture", fixture_file=fixture)
+            self.assertEqual(ctx.exception.code, "media_selection_required")
 
 
 if __name__ == "__main__":
