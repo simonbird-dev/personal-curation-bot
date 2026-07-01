@@ -79,6 +79,17 @@ PYTHONPATH=src python3 -m curation_bot.cli execute-media-download \
 
 For multi-item packages, `--selected-shortcode` is required so one fixture file cannot silently be copied to the wrong selected slide.
 
+## Package readiness check
+
+Before any Instagram/browser automation, check whether the package is genuinely ready:
+
+```bash
+PYTHONPATH=src python3 -m curation_bot.cli check-package-readiness \
+  --package /tmp/curation-demo/draft_packages/finds/PACKAGE_ID
+```
+
+The command reports whether all selected media files exist under `package/media/`, lists blockers such as missing files or unsafe media paths, and returns the safe next step. It performs no browser, account, provider, or download action.
+
 ## Instagram account switching
 
 The bot separates saved content/category state from Instagram login state.

@@ -41,6 +41,17 @@ class MediaDownloadResult:
     copied_files: list[str]
 
 
+@dataclass(frozen=True)
+class PackageReadinessResult:
+    package_dir: str
+    package_ready_for_instagram_draft: bool
+    media_status: str
+    blockers: list[str]
+    warnings: list[str]
+    safe_next_step: str
+    items: list[dict[str, Any]]
+
+
 def load_capture_record(path: Path) -> dict[str, Any]:
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -410,6 +421,119 @@ def update_package_manifest_media_status(package_dir: Path, media_status: str) -
     write_json(manifest_path, manifest)
 
 
+def expected_media_destination(package_dir: Path, expected_relative_path: str) -> Path:
+    relative = Path(expected_relative_path)
+    if relative.is_absolute() or not relative.parts or relative.parts[0] != "media" or ".." in relative.parts:
+        raise CurationBotError("unsafe_media_path", "Expected media path must be a relative path under media/.")
+    destination = package_dir / relative
+    try:
+        destination.resolve().relative_to((package_dir / "media").resolve())
+    except ValueError as exc:
+        raise CurationBotError("unsafe_media_path", "Expected media path must stay under the package media directory.") from exc
+    return destination
+
+
+def check_package_readiness(package_dir: Path) -> PackageReadinessResult:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    readiness_items: list[dict[str, Any]] = []
+
+    manifest_path = package_dir / "manifest.json"
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        manifest = None
+        blockers.append(f"Missing manifest.json at {manifest_path}")
+    except json.JSONDecodeError as exc:
+        manifest = None
+        blockers.append(f"manifest.json is not valid JSON: {exc}")
+
+    if isinstance(manifest, dict):
+        if manifest.get("schema_version") != "personal_curation_draft_package_v0_1":
+            blockers.append("manifest.json has unsupported schema_version.")
+        if manifest.get("status") != "ready_for_manual_instagram_posting":
+            warnings.append(f"Package manifest status is {manifest.get('status')!r}, not ready_for_manual_instagram_posting.")
+    elif manifest is not None:
+        blockers.append("manifest.json must be a JSON object.")
+
+    try:
+        media_manifest = load_media_manifest(package_dir)
+    except CurationBotError as exc:
+        media_manifest = None
+        blockers.append(exc.message)
+
+    existing_count = 0
+    expected_count = 0
+    if isinstance(media_manifest, dict):
+        for index, item in enumerate(media_manifest.get("items", []), start=1):
+            if not isinstance(item, dict):
+                blockers.append(f"Media manifest item {index} is not a JSON object.")
+                continue
+            raw_selected_media = item.get("selected_media")
+            selected_media: dict[str, Any] = raw_selected_media if isinstance(raw_selected_media, dict) else {}
+            shortcode = selected_media.get("shortcode") or item.get("item_id") or f"item-{index}"
+            expected_relative_path = item.get("expected_media_relative_path")
+            readiness_item = {
+                "position": item.get("position"),
+                "item_id": item.get("item_id"),
+                "shortcode": shortcode,
+                "expected_media_relative_path": expected_relative_path,
+                "manifest_status": item.get("status"),
+                "file_exists": False,
+            }
+            if not isinstance(expected_relative_path, str):
+                blockers.append(f"Missing expected media path for {shortcode}")
+                readiness_items.append(readiness_item)
+                continue
+            expected_count += 1
+            try:
+                destination = expected_media_destination(package_dir, expected_relative_path)
+            except CurationBotError as exc:
+                blockers.append(f"Unsafe media path for {shortcode}: {exc.message}")
+                readiness_items.append(readiness_item)
+                continue
+            readiness_item["expected_media_path"] = str(destination)
+            readiness_item["file_exists"] = destination.exists() and destination.is_file()
+            if readiness_item["file_exists"]:
+                existing_count += 1
+                readiness_item["actual_media_path"] = str(destination)
+            else:
+                blockers.append(f"Missing downloaded media for {shortcode}: {expected_relative_path}")
+            readiness_items.append(readiness_item)
+
+    if expected_count == 0:
+        media_status = "media_not_downloaded"
+    elif existing_count == expected_count:
+        media_status = "media_downloaded"
+    elif existing_count > 0:
+        media_status = "media_partially_downloaded"
+    else:
+        media_status = "media_not_downloaded"
+
+    package_ready = not blockers and media_status == "media_downloaded"
+    if package_ready:
+        safe_next_step = "Package is ready for the Instagram draft automation pre-flight; browser/account automation still requires a separate approved lane."
+    elif media_status == "media_partially_downloaded":
+        safe_next_step = "Run execute-media-download for the missing selected shortcode(s) before browser automation."
+    elif any("manifest.json" in blocker for blocker in blockers):
+        safe_next_step = "Repair or recreate the draft package manifest before media download or browser automation."
+    elif any("media_manifest" in blocker or "Media manifest" in blocker for blocker in blockers):
+        safe_next_step = "Create or repair the package media_manifest.json before media download or browser automation."
+    else:
+        safe_next_step = "Run execute-media-download for each selected media item before browser automation."
+
+    return PackageReadinessResult(
+        package_dir=str(package_dir),
+        package_ready_for_instagram_draft=package_ready,
+        media_status=media_status,
+        blockers=blockers,
+        warnings=warnings,
+        safe_next_step=safe_next_step,
+        items=readiness_items,
+    )
+
+
 def execute_media_download(
     *,
     package_dir: Path,
@@ -437,11 +561,9 @@ def execute_media_download(
     copied_files = []
     for item in selected_items:
         expected_relative_path = item.get("expected_media_relative_path")
-        if not isinstance(expected_relative_path, str) or not expected_relative_path.startswith("media/"):
+        if not isinstance(expected_relative_path, str):
             raise CurationBotError("unsafe_media_path", "Expected media path must be a relative path under media/.")
-        destination = package_dir / expected_relative_path
-        if destination.resolve().parent != (package_dir / "media").resolve():
-            raise CurationBotError("unsafe_media_path", "Expected media path must stay directly under the package media directory.")
+        destination = expected_media_destination(package_dir, expected_relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(fixture_file, destination)
         item["status"] = "downloaded"

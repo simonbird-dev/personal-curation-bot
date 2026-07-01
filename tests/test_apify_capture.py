@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from curation_bot.apify_capture import CaptureError, capture_from_dataset
-from curation_bot.core import CurationBotError, execute_media_download, ingest_capture_record
+from curation_bot.core import CurationBotError, check_package_readiness, execute_media_download, ingest_capture_record
 
 
 DATASET = [
@@ -39,6 +39,29 @@ DATASET = [
 
 
 class ApifyCapturePipelineTests(unittest.TestCase):
+    def build_two_item_package(self, root: Path) -> Path:
+        dataset_path = root / "dataset.json"
+        dataset_path.write_text(json.dumps(DATASET), encoding="utf-8")
+        first_record = capture_from_dataset(
+            source_url="https://www.instagram.com/p/ABC123/?img_index=2",
+            selected_slide=2,
+            dataset_path=dataset_path,
+            data_root=root,
+            category="finds",
+            stream="/finds",
+        )
+        second_record = capture_from_dataset(
+            source_url="https://www.instagram.com/p/ABC123/?img_index=1",
+            selected_slide=1,
+            dataset_path=dataset_path,
+            data_root=root,
+            category="finds",
+            stream="/finds",
+        )
+        ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
+        result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+        return Path(result.draft_package or "")
+
     def test_capture_from_dataset_writes_sanitised_record_without_raw_urls(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -294,6 +317,82 @@ class ApifyCapturePipelineTests(unittest.TestCase):
             with self.assertRaises(CurationBotError) as ctx:
                 execute_media_download(package_dir=Path(result.draft_package or ""), provider="local-fixture", fixture_file=fixture)
             self.assertEqual(ctx.exception.code, "media_selection_required")
+
+    def test_package_readiness_blocks_when_manifest_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "package"
+            package.mkdir()
+
+            result = check_package_readiness(package)
+
+            self.assertFalse(result.package_ready_for_instagram_draft)
+            self.assertEqual(result.media_status, "media_not_downloaded")
+            self.assertTrue(any("Missing manifest.json" in blocker for blocker in result.blockers))
+            self.assertIn("Repair or recreate", result.safe_next_step)
+
+    def test_package_readiness_reports_partial_media(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = self.build_two_item_package(root)
+            fixture = root / "fixture.mp4"
+            fixture.write_bytes(b"fake-video")
+            execute_media_download(
+                package_dir=package,
+                provider="local-fixture",
+                fixture_file=fixture,
+                selected_shortcode="CHILD2",
+            )
+
+            result = check_package_readiness(package)
+
+            self.assertFalse(result.package_ready_for_instagram_draft)
+            self.assertEqual(result.media_status, "media_partially_downloaded")
+            self.assertTrue(any("Missing downloaded media for CHILD1" in blocker for blocker in result.blockers))
+            items_by_shortcode = {item["shortcode"]: item for item in result.items}
+            self.assertFalse(items_by_shortcode["CHILD1"]["file_exists"])
+            self.assertTrue(items_by_shortcode["CHILD2"]["file_exists"])
+
+    def test_package_readiness_ready_when_all_expected_media_files_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = self.build_two_item_package(root)
+            video_fixture = root / "fixture.mp4"
+            image_fixture = root / "fixture.jpg"
+            video_fixture.write_bytes(b"fake-video")
+            image_fixture.write_bytes(b"fake-image")
+            execute_media_download(
+                package_dir=package,
+                provider="local-fixture",
+                fixture_file=video_fixture,
+                selected_shortcode="CHILD2",
+            )
+            execute_media_download(
+                package_dir=package,
+                provider="local-fixture",
+                fixture_file=image_fixture,
+                selected_shortcode="CHILD1",
+            )
+
+            result = check_package_readiness(package)
+
+            self.assertTrue(result.package_ready_for_instagram_draft)
+            self.assertEqual(result.media_status, "media_downloaded")
+            self.assertEqual(result.blockers, [])
+            self.assertIn("ready", result.safe_next_step)
+
+    def test_package_readiness_blocks_unsafe_media_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = self.build_two_item_package(root)
+            media_manifest_path = package / "media_manifest.json"
+            media_manifest = json.loads(media_manifest_path.read_text())
+            media_manifest["items"][0]["expected_media_relative_path"] = "../escape.mp4"
+            media_manifest_path.write_text(json.dumps(media_manifest), encoding="utf-8")
+
+            result = check_package_readiness(package)
+
+            self.assertFalse(result.package_ready_for_instagram_draft)
+            self.assertTrue(any("Unsafe media path" in blocker for blocker in result.blockers))
 
 
 if __name__ == "__main__":
