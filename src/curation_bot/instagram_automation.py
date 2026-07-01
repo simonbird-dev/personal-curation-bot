@@ -133,13 +133,25 @@ def _active_or_named_account(account_id: str | None) -> InstagramAccountRef:
         return set_active_account("test")
 
 
+def _require_playwright():
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError as exc:
+        raise InstagramAutomationError(
+            "playwright_missing",
+            "Playwright is not installed in this environment, so browser/account automation cannot run. Install it only in an approved setup lane.",
+        ) from exc
+    return PlaywrightTimeoutError, sync_playwright
+
+
 def check_instagram_session(account_id: str | None = None) -> DraftRunResult:
     """Headless session check with minimal screenshot evidence.
 
     This intentionally avoids saving page text/logs because the logged-in home page
     can expose private feed content.
     """
-    from playwright.sync_api import sync_playwright
+    _, sync_playwright = _require_playwright()
 
     ensure_runtime_dirs()
     ref = _active_or_named_account(account_id)
@@ -187,12 +199,10 @@ def prepare_instagram_draft(
     upload/crop/filter stages, but it must not click final Share/Post. It stops on
     the review/caption screen and saves a screenshot.
     """
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-    from playwright.sync_api import sync_playwright
-
     ensure_runtime_dirs()
     plan_browser_draft_automation(package_dir)
     draft_media = resolve_draft_media(package_dir, media_paths=media_paths, caption=caption)
+    PlaywrightTimeoutError, sync_playwright = _require_playwright()
     ref = _active_or_named_account(account_id)
     screenshot = SCREENSHOTS_DIR / f"instagram-draft-ready-{ref.account_id}.png"
 

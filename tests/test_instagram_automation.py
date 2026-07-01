@@ -4,11 +4,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from curation_bot.apify_capture import capture_from_dataset
 from curation_bot.core import execute_media_download, ingest_capture_record, ingest_link
 from curation_bot.instagram_automation import (
     InstagramAutomationError,
+    _require_playwright,
     plan_browser_draft_automation,
     resolve_draft_media,
 )
@@ -127,6 +129,20 @@ class InstagramAutomationBoundaryTests(unittest.TestCase):
             self.assertEqual(draft_media.media_paths, (image.resolve(),))
             self.assertIn("finds draft", draft_media.caption)
             self.assertIn("https://www.instagram.com/p/example1/", draft_media.caption)
+
+    def test_missing_playwright_fails_with_stable_error_code(self):
+        real_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "playwright.sync_api":
+                raise ModuleNotFoundError("No module named 'playwright'")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(InstagramAutomationError) as ctx:
+                _require_playwright()
+        self.assertEqual(ctx.exception.code, "playwright_missing")
+        self.assertIn("approved setup lane", ctx.exception.message)
 
 
 if __name__ == "__main__":
