@@ -1,14 +1,18 @@
 {
   "finds": {
-    "target_count": 2,
-    "description": "Personal Instagram finds ready for review/post package preparation."
+    "target_count": 8,
+    "description": "Finders / Keepers: personal Instagram music finds. V1 batches default to and cap at 8 items."
   },
   "live": {
-    "target_count": 2,
-    "description": "Personal live/reference captures."
+    "target_count": 8,
+    "description": "Live / Vibes: personal live, DJ, event, and mood captures. V1 batches default to and cap at 8 items."
+  },
+  "mixes": {
+    "target_count": 5,
+    "description": "Mixes / Sets: manual clip/upload and SoundCloud/source-link captures. V1 batches default to 5 items."
   },
   "fashion": {
-    "target_count": 3,
-    "description": "Image-first fashion/Pinterest lane; private-account handling is not implemented in this slice."
+    "target_count": 8,
+    "description": "Fashion Finds / Moodboard: Instagram/Pinterest/manual image references. V1 batches default to and cap at 8 images."
   }
 }

@@ -45,6 +45,22 @@ DATASET = [
 ]
 
 
+def write_test_config(root: Path, target_count: int = 2) -> Path:
+    config_path = root / "categories.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "finds": {"target_count": target_count},
+                "live": {"target_count": target_count},
+                "mixes": {"target_count": target_count},
+                "fashion": {"target_count": target_count},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
 class InstagramAutomationBoundaryTests(unittest.TestCase):
     def build_selected_media_package(self, root: Path) -> Path:
         dataset_path = root / "dataset.json"
@@ -65,8 +81,8 @@ class InstagramAutomationBoundaryTests(unittest.TestCase):
             category="finds",
             stream="/finds",
         )
-        ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
-        result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+        ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root, config_path=write_test_config(root))
+        result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root, config_path=write_test_config(root))
         return Path(result.draft_package or "")
 
     def make_selected_media_package_ready(self, package: Path, root: Path) -> None:
@@ -108,8 +124,8 @@ class InstagramAutomationBoundaryTests(unittest.TestCase):
     def test_resolve_draft_media_requires_uploadable_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example1/", data_root=root)
-            result = ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example2/", data_root=root)
+            ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example1/", data_root=root, config_path=write_test_config(root))
+            result = ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example2/", data_root=root, config_path=write_test_config(root))
             with self.assertRaises(InstagramAutomationError) as ctx:
                 resolve_draft_media(Path(result.draft_package or ""))
             self.assertEqual(ctx.exception.code, "missing_media")
@@ -117,8 +133,8 @@ class InstagramAutomationBoundaryTests(unittest.TestCase):
     def test_resolve_draft_media_uses_package_media_and_caption_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example1/", data_root=root)
-            result = ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example2/", data_root=root)
+            ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example1/", data_root=root, config_path=write_test_config(root))
+            result = ingest_link(category="finds", text_or_url="https://www.instagram.com/p/example2/", data_root=root, config_path=write_test_config(root))
             package = Path(result.draft_package or "")
             media_dir = package / "media"
             media_dir.mkdir()

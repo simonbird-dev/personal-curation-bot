@@ -131,8 +131,25 @@ def login_from_terminal(account_id: str | None = None) -> int:
                     last_error = exc
             raise RuntimeError(f"Could not fill Instagram {field_name} field") from last_error
 
-        type_first(username_selectors, username, "username")
-        password_field = type_first(password_selectors, password, "password")
+        try:
+            type_first(username_selectors, username, "username")
+            password_field = type_first(password_selectors, password, "password")
+        except Exception as exc:
+            page.screenshot(path=str(screenshot), full_page=False)
+            current_url = page.url
+            try:
+                body = page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                body = ""
+            context.close()
+            print(f"login_status=login_form_unavailable screenshot={screenshot}")
+            print(f"login_url={current_url}")
+            if not body.strip():
+                print("detail=Instagram rendered a blank login shell; do not keep retrying headless login. Use a visible/manual browser surface for this persistent profile.")
+            else:
+                print(f"detail=Could not fill Instagram login form: {exc}")
+            return 1
+
         try:
             page.locator('input[type="submit"]').first.wait_for(state="attached", timeout=5000)
             page.wait_for_timeout(1000)

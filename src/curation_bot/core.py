@@ -30,6 +30,8 @@ class IngestResult:
     threshold_reached: bool
     draft_package: str | None
     item_id: str
+    subcategory: str | None = None
+    queue_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,8 +115,13 @@ def validate_supported_url(url: str) -> str:
     host = parsed.netloc.lower()
     if host.startswith("www."):
         host = host[4:]
-    supported_hosts = {"instagram.com", "pin.it", "pinterest.com"}
-    if host not in supported_hosts and not host.endswith(".instagram.com") and not host.endswith(".pinterest.com"):
+    supported_hosts = {"instagram.com", "pin.it", "pinterest.com", "soundcloud.com"}
+    if (
+        host not in supported_hosts
+        and not host.endswith(".instagram.com")
+        and not host.endswith(".pinterest.com")
+        and not host.endswith(".soundcloud.com")
+    ):
         raise CurationBotError("unsupported_url", f"Unsupported host: {parsed.netloc}")
     return url
 
@@ -124,19 +131,41 @@ def slugify_url(url: str) -> str:
     return slug.strip("-")[:48] or "link"
 
 
-def ensure_dirs(data_root: Path, category: str) -> dict[str, Path]:
+def safe_subcategory(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "-", raw.strip().lstrip("/").lower()).strip("-")
+    return cleaned or None
+
+
+def queue_key_for(category: str, subcategory: str | None = None) -> str:
+    safe = safe_subcategory(subcategory)
+    if category == "finds" and safe:
+        return f"finds/{safe}"
+    return category
+
+
+def queue_label_for(category: str, subcategory: str | None = None) -> str:
+    safe = safe_subcategory(subcategory)
+    if category == "finds" and safe:
+        return f"finds/{safe}"
+    return category
+
+
+def ensure_dirs(data_root: Path, category: str, subcategory: str | None = None) -> dict[str, Path]:
+    queue_key = queue_key_for(category, subcategory)
     paths = {
-        "queue": data_root / "queues" / category,
-        "drafts": data_root / "draft_packages" / category,
-        "archive": data_root / "archive" / category,
+        "queue": data_root / "queues" / queue_key,
+        "drafts": data_root / "draft_packages" / queue_key,
+        "archive": data_root / "archive" / queue_key,
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
     return paths
 
 
-def queue_items(data_root: Path, category: str) -> list[Path]:
-    queue_dir = data_root / "queues" / category
+def queue_items(data_root: Path, category: str, subcategory: str | None = None) -> list[Path]:
+    queue_dir = data_root / "queues" / queue_key_for(category, subcategory)
     if not queue_dir.exists():
         return []
     return sorted(queue_dir.glob("*.json"))
@@ -183,16 +212,17 @@ def queue_item_and_maybe_package(
     data_root: Path,
     config_path: Path,
     created_at: str,
+    subcategory: str | None = None,
 ) -> IngestResult:
     categories = load_categories(config_path)
     if category not in categories:
         raise CurationBotError("unknown_category", f"Unknown category: {category}")
 
-    paths = ensure_dirs(data_root, category)
+    paths = ensure_dirs(data_root, category, subcategory)
     item_path = paths["queue"] / f"{item['item_id']}.json"
     write_json(item_path, item)
 
-    items = queue_items(data_root, category)
+    items = queue_items(data_root, category, subcategory)
     target_count = categories[category]["target_count"]
     draft_package = None
     threshold_reached = len(items) >= target_count
@@ -202,15 +232,18 @@ def queue_item_and_maybe_package(
             data_root=data_root,
             target_count=target_count,
             created_at=created_at,
+            subcategory=subcategory,
         )
 
     return IngestResult(
         category=category,
-        queue_count=len(queue_items(data_root, category)),
+        queue_count=len(queue_items(data_root, category, subcategory)),
         target_count=target_count,
         threshold_reached=threshold_reached,
         draft_package=draft_package,
         item_id=item["item_id"],
+        subcategory=safe_subcategory(subcategory),
+        queue_key=queue_key_for(category, subcategory),
     )
 
 
@@ -221,6 +254,8 @@ def ingest_link(
     data_root: Path,
     config_path: Path = DEFAULT_CONFIG_PATH,
     source: str = "cli",
+    subcategory: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> IngestResult:
     categories = load_categories(config_path)
     if category not in categories:
@@ -233,7 +268,10 @@ def ingest_link(
         "schema_version": "personal_curation_link_item_v0_1",
         "item_id": item_id,
         "category": category,
+        "subcategory": safe_subcategory(subcategory),
+        "queue_key": queue_key_for(category, subcategory),
         "source": source,
+        "source_metadata": source_metadata or {},
         "url": url,
         "status": "queued",
         "created_at": now,
@@ -249,6 +287,7 @@ def ingest_link(
         data_root=data_root,
         config_path=config_path,
         created_at=now,
+        subcategory=subcategory,
     )
 
 
@@ -259,6 +298,7 @@ def ingest_capture_record(
     data_root: Path,
     config_path: Path = DEFAULT_CONFIG_PATH,
     source: str = "apify_capture",
+    subcategory: str | None = None,
 ) -> IngestResult:
     categories = load_categories(config_path)
     if category not in categories:
@@ -276,6 +316,8 @@ def ingest_capture_record(
         "schema_version": "personal_curation_link_item_v0_1",
         "item_id": item_id,
         "category": category,
+        "subcategory": safe_subcategory(subcategory),
+        "queue_key": queue_key_for(category, subcategory),
         "source": source,
         "url": url,
         "status": "queued",
@@ -299,18 +341,20 @@ def ingest_capture_record(
         data_root=data_root,
         config_path=config_path,
         created_at=now,
+        subcategory=subcategory,
     )
 
 
-def create_draft_package(*, category: str, data_root: Path, target_count: int, created_at: str | None = None) -> str:
+def create_draft_package(*, category: str, data_root: Path, target_count: int, created_at: str | None = None, subcategory: str | None = None) -> str:
     created_at = created_at or utc_now_iso()
-    paths = ensure_dirs(data_root, category)
-    items = queue_items(data_root, category)
+    paths = ensure_dirs(data_root, category, subcategory)
+    items = queue_items(data_root, category, subcategory)
     if len(items) < target_count:
         raise CurationBotError("threshold_not_met", f"Need {target_count} items, have {len(items)}.")
 
     selected = items[:target_count]
-    package_id = f"{created_at.replace(':', '').replace('+', 'Z')}-{category}-{target_count}-items"
+    package_slug = queue_key_for(category, subcategory).replace("/", "-")
+    package_id = f"{created_at.replace(':', '').replace('+', 'Z')}-{package_slug}-{target_count}-items"
     package_dir = paths["drafts"] / package_id
     package_dir.mkdir(parents=True, exist_ok=False)
 
@@ -330,6 +374,16 @@ def create_draft_package(*, category: str, data_root: Path, target_count: int, c
             "item_id": item["item_id"],
             "url": item["url"],
         }
+        source_metadata = item.get("source_metadata") if isinstance(item.get("source_metadata"), dict) else {}
+        if source_metadata:
+            manifest_item["source_metadata"] = source_metadata
+            selected_slide = source_metadata.get("selected_slide")
+            if isinstance(selected_slide, int) and selected_slide >= 1:
+                manifest_item["selected_media_request"] = {
+                    "selected_index_1based": selected_slide,
+                    "status": "requires_extraction_from_source_post",
+                    "reason": "Telegram intake saved the Instagram post URL; a later capture step must extract the intended carousel tile before draft automation.",
+                }
         if item.get("capture_record_path"):
             manifest_item["capture_record_path"] = item["capture_record_path"]
         if isinstance(item.get("selected_media"), dict):
@@ -345,6 +399,8 @@ def create_draft_package(*, category: str, data_root: Path, target_count: int, c
         "schema_version": "personal_curation_draft_package_v0_1",
         "package_id": package_id,
         "category": category,
+        "subcategory": safe_subcategory(subcategory),
+        "queue_key": queue_key_for(category, subcategory),
         "created_at": created_at,
         "item_count": len(manifest_items),
         "status": "ready_for_manual_instagram_posting",
@@ -358,6 +414,8 @@ def create_draft_package(*, category: str, data_root: Path, target_count: int, c
             "schema_version": "personal_curation_media_plan_v0_1",
             "package_id": package_id,
             "category": category,
+            "subcategory": safe_subcategory(subcategory),
+            "queue_key": queue_key_for(category, subcategory),
             "created_at": created_at,
             "status": "media_not_downloaded",
             "important_boundary": "This file is a storage/download contract only. It contains expected local media paths and selected-media metadata, not raw media URLs or downloaded files.",
@@ -718,9 +776,24 @@ def status(data_root: Path, config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str
     categories = load_categories(config_path)
     result = {}
     for category, cfg in categories.items():
+        category_queue_dir = data_root / "queues" / category
+        category_drafts_dir = data_root / "draft_packages" / category
+        subqueues: dict[str, dict[str, Any]] = {}
+        if category_queue_dir.exists():
+            for child in sorted(p for p in category_queue_dir.iterdir() if p.is_dir()):
+                subqueue_name = child.name
+                draft_dir = category_drafts_dir / subqueue_name
+                subqueues[subqueue_name] = {
+                    "queue_count": len(list(child.glob("*.json"))),
+                    "target_count": cfg["target_count"],
+                    "draft_package_count": len([p for p in draft_dir.iterdir() if p.is_dir() and (p / "manifest.json").exists()]) if draft_dir.exists() else 0,
+                    "queue_key": f"{category}/{subqueue_name}",
+                }
         result[category] = {
             "queue_count": len(queue_items(data_root, category)),
             "target_count": cfg["target_count"],
-            "draft_package_count": len(list((data_root / "draft_packages" / category).glob("*"))) if (data_root / "draft_packages" / category).exists() else 0,
+            "draft_package_count": len([p for p in category_drafts_dir.iterdir() if p.is_dir() and (p / "manifest.json").exists()]) if category_drafts_dir.exists() else 0,
         }
+        if subqueues:
+            result[category]["subqueues"] = subqueues
     return result

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .apify_capture import CaptureError, capture_from_dataset
 from .core import CurationBotError, build_manual_review_pack, check_package_readiness, execute_media_download, ingest_capture_record, ingest_link, status
+from .telegram_intake import handle_telegram_text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     review = sub.add_parser("build-manual-review-pack", help="Write local caption/checklist/review files for manual posting. No browser, account, live Apify, download, or publish action is performed.")
     review.add_argument("--package", dest="package_dir", type=Path, required=True, help="Draft package directory containing manifest.json and media_manifest.json")
+
+    telegram = sub.add_parser("telegram-message", help="Handle one Telegram-style message locally, e.g. '/finds /house slide 5 https://www.instagram.com/p/ABC123/'.")
+    telegram.add_argument("message", nargs="+", help="Telegram message text to parse and ingest/status/help.")
 
     sub.add_parser("status", help="Show local queue/package status.")
     return parser
@@ -102,6 +106,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "build-manual-review-pack":
             result = build_manual_review_pack(package_dir=args.package_dir)
             print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+            return 0
+        if args.command == "telegram-message":
+            result = handle_telegram_text(text=" ".join(args.message), data_root=data_root)
+            print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
             return 0
         if args.command == "status":
             print(json.dumps(status(data_root), indent=2, sort_keys=True))

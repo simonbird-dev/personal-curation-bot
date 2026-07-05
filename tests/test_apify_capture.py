@@ -38,6 +38,22 @@ DATASET = [
 ]
 
 
+def write_test_config(root: Path, target_count: int = 2) -> Path:
+    config_path = root / "categories.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "finds": {"target_count": target_count},
+                "live": {"target_count": target_count},
+                "mixes": {"target_count": target_count},
+                "fashion": {"target_count": target_count},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
 class ApifyCapturePipelineTests(unittest.TestCase):
     def build_two_item_package(self, root: Path) -> Path:
         dataset_path = root / "dataset.json"
@@ -58,8 +74,8 @@ class ApifyCapturePipelineTests(unittest.TestCase):
             category="finds",
             stream="/finds",
         )
-        ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
-        result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+        ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root, config_path=write_test_config(root))
+        result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root, config_path=write_test_config(root))
         return Path(result.draft_package or "")
 
     def test_capture_from_dataset_writes_sanitised_record_without_raw_urls(self):
@@ -100,7 +116,7 @@ class ApifyCapturePipelineTests(unittest.TestCase):
                 stream="/finds",
             )
 
-            result = ingest_capture_record(category="finds", capture_record_path=record_path, data_root=root)
+            result = ingest_capture_record(category="finds", capture_record_path=record_path, data_root=root, config_path=write_test_config(root))
 
             self.assertEqual(result.queue_count, 1)
             queued = list((root / "queues" / "finds").glob("*.json"))
@@ -132,8 +148,8 @@ class ApifyCapturePipelineTests(unittest.TestCase):
                 stream="/finds",
             )
 
-            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
-            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root, config_path=write_test_config(root))
+            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root, config_path=write_test_config(root))
 
             self.assertTrue(result.threshold_reached)
             manifest_path = Path(result.draft_package or "") / "manifest.json"
@@ -182,7 +198,7 @@ class ApifyCapturePipelineTests(unittest.TestCase):
             record_path.write_text(json.dumps(record), encoding="utf-8")
 
             with self.assertRaises(CurationBotError) as ctx:
-                ingest_capture_record(category="finds", capture_record_path=record_path, data_root=root)
+                ingest_capture_record(category="finds", capture_record_path=record_path, data_root=root, config_path=write_test_config(root))
             self.assertEqual(ctx.exception.code, "unsafe_capture_record")
     def test_media_download_refuses_without_explicit_provider(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -261,8 +277,8 @@ class ApifyCapturePipelineTests(unittest.TestCase):
                 category="finds",
                 stream="/finds",
             )
-            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
-            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root, config_path=write_test_config(root))
+            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root, config_path=write_test_config(root))
             package_dir = Path(result.draft_package or "")
             fixture = root / "fixture.mp4"
             fixture.write_bytes(b"fake-video")
@@ -309,8 +325,8 @@ class ApifyCapturePipelineTests(unittest.TestCase):
                 data_root=root,
                 category="finds",
             )
-            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root)
-            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root)
+            ingest_capture_record(category="finds", capture_record_path=first_record, data_root=root, config_path=write_test_config(root))
+            result = ingest_capture_record(category="finds", capture_record_path=second_record, data_root=root, config_path=write_test_config(root))
             fixture = root / "fixture.mp4"
             fixture.write_bytes(b"fake-video")
 

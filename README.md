@@ -6,13 +6,13 @@ This is **not** Speedlab OS, not a public SaaS, not a growth-hacking system, and
 
 ## Current implemented slice
 
-This first slice implements the local app core only:
+This slice now implements the local app core plus a tested Telegram-style intake adapter:
 
 ```text
-message/link intake -> category queue -> threshold check -> draft package folder
+Telegram-style message/link text -> stream/category queue -> threshold check -> draft package folder
 ```
 
-It does **not** yet connect to Telegram, Instagram, Pinterest, or any live account.
+It does **not** yet connect to a dedicated live Telegram bot token. The transport is deliberately separated so the parser/state rules can be used now from the CLI and then wired to a dedicated bot chat later without changing the storage model.
 
 ## Current hard boundary
 
@@ -28,8 +28,24 @@ No credentials belong in this repo.
 ## Run tests
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+python -m unittest discover -s tests -v
 ```
+
+## Local Telegram-style demo
+
+```bash
+. .venv/bin/activate
+curation-bot --data-root ./data telegram-message /finds /house slide 5 https://www.instagram.com/p/example1/
+curation-bot --data-root ./data telegram-message /live https://www.instagram.com/reel/example2/
+curation-bot --data-root ./data telegram-message /mixes https://soundcloud.com/example/set
+curation-bot --data-root ./data telegram-message /fashion https://pin.it/example
+curation-bot --data-root ./data telegram-message /status
+```
+
+The command returns the exact reply text the future dedicated Telegram transport should send back to Simon. Production stream batches are set to 8 items for `/finds/<dynamic-genre>`, `/live`, and `/fashion`; `/mixes` batches at 5. `/finds` genres are not predefined: any slash genre such as `/house`, `/techno`, or `/deep-tribal` creates and files into its own queue. When text says `slide N`, Telegram intake preserves that as selected-media intent because the Instagram URL is still only a post/carousel link; a later capture step must extract the actual single tile before draft automation. Tests use separate small fixture configs so the real defaults do not get dragged back to proof-mode thresholds.
 
 ## Local demo
 
